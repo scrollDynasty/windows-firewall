@@ -47,7 +47,7 @@
 
 ### Build Ecosystem
 - **Build System**: CMake 3.15+
-- **Toolchain**: Visual Studio 2022
+- **Toolchain**: Clion 2024.3.2
 
 ### Key Libraries
 - **Packet Processing**: LibPcap
@@ -56,7 +56,7 @@
 ## 📋 Prerequisites
 
 - Windows 10/11
-- Visual Studio 2022
+- Clion 2024.3.2
 - CMake 3.15+
 - Npcap library
 - Administrator privileges
