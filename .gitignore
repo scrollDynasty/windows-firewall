@@ -1,0 +1,30 @@
+# Build directories
+/cmake-build-debug/
+/cmake-build-release/
+/build/
+/out/
+
+# Logs
+/logs/
+*.log
+
+# IDE specific files
+.idea/
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+
+# Binary files
+*.exe
+*.dll
+*.lib
+*.pdb
+
+# Config files that могут содержать sensitive data
+/config/*.json
+/config/*.conf
+
+# Dependencies that should be installed separately
+/extern/npcap/
