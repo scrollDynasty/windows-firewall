@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="docs/assets/logo.png" alt="Firewall Logo" width="200"/>
   <h1>🛡️ Windows Packet Firewall</h1>
 
   <p>A modern, lightweight packet filtering firewall for Windows with real-time monitoring and logging capabilities.</p>
@@ -9,6 +8,14 @@
 [![C11](https://img.shields.io/badge/C-17-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![CMake](https://img.shields.io/badge/CMake-3.15+-green.svg)](https://cmake.org/)
 </div>
+
+## 📸 Application Screenshots
+
+### Firewall Console Interface
+![Firewall Application Interface](img/firewall_interface.png)
+
+### Detailed Log File View
+![Firewall Log File](img/firewall_log.png)
 
 ## 🌟 Features
 
