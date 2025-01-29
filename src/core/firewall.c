@@ -4,6 +4,7 @@
 #include "rule_manager.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <packet_capture.h>
 
 static FirewallConfig g_config;
 static int g_is_running = 0;
