@@ -4,108 +4,160 @@
 #include <pcap.h>
 #include <stdio.h>
 #include <time.h>
+#include <limits.h>
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#define MAX_BLOCKED_DOMAINS 100
-#define MAX_DOMAIN_LENGTH 256
-
-static struct {
-    char domains[MAX_BLOCKED_DOMAINS][MAX_DOMAIN_LENGTH];
-    int count;
-} blocked_domains = {0};
-
-static unsigned long packets_total = 0;
+// Глобальные счетчики
 static unsigned long packets_blocked = 0;
 static unsigned long packets_allowed = 0;
 static unsigned long domain_blocks = 0;
 
-#define TH_FIN  0x01
-#define TH_SYN  0x02
-#define TH_RST  0x04
-#define TH_PUSH 0x08
-#define TH_ACK  0x10
-#define TH_URG  0x20
-
-void add_blocked_domain(const char* domain) {
-    if (blocked_domains.count < MAX_BLOCKED_DOMAINS) {
-        strncpy(blocked_domains.domains[blocked_domains.count],
-                domain,
-                MAX_DOMAIN_LENGTH - 1);
-        blocked_domains.domains[blocked_domains.count][MAX_DOMAIN_LENGTH - 1] = '\0';
-        blocked_domains.count++;
-        log_message(LOG_INFO, "Added blocked domain: %s", domain);
-    } else {
-        log_message(LOG_WARNING, "Maximum number of blocked domains reached");
-    }
-}
+// Вспомогательная функция для получения порта
 static uint16_t get_port(const u_char* packet, int offset, int src) {
-    struct tcp_header* tcp_header = (struct tcp_header*)(packet + 14 + offset);
-    return src ? ntohs(tcp_header->source) : ntohs(tcp_header->dest);
-}
-
-static int is_ip_blocked(const char* ip_addr) {
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        log_message(LOG_ERROR, "WSAStartup failed");
+    if (!packet || offset < 0) {
         return 0;
     }
 
-    for (int i = 0; i < blocked_domains.count; i++) {
-        struct addrinfo hints, *result;
-        ZeroMemory(&hints, sizeof(hints));
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_protocol = IPPROTO_TCP;
+    const struct tcp_header* tcp_header = (struct tcp_header*)(packet + 14 + offset);
+    if (src) {
+        return ntohs(tcp_header->source);
+    }
+    return ntohs(tcp_header->dest);
+}
 
-        if (getaddrinfo(blocked_domains.domains[i], NULL, &hints, &result) == 0) {
-            for (struct addrinfo* ptr = result; ptr != NULL; ptr = ptr->ai_next) {
-                char ipstr[INET_ADDRSTRLEN];
-                struct sockaddr_in* addr = (struct sockaddr_in*)ptr->ai_addr;
-                inet_ntop(AF_INET, &(addr->sin_addr), ipstr, INET_ADDRSTRLEN);
+// Главная функция обработки пакетов
+void process_packet(const u_char *packet, const struct pcap_pkthdr *header) {
+    static unsigned long packets_processed = 0;
+    static time_t last_stats_time = 0;
+    time_t current_time = time(NULL);
+    char timestamp[26];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&current_time));
 
-                if (strcmp(ip_addr, ipstr) == 0) {
-                    freeaddrinfo(result);
-                    WSACleanup();
-                    domain_blocks++;
-                    return 1;
-                }
-            }
-            freeaddrinfo(result);
-        }
+    // Базовые проверки валидности пакета
+    if (!packet || !header) {
+        log_message(LOG_WARNING, "Received invalid packet (NULL)");
+        return;
     }
 
-    WSACleanup();
-    return 0;
+    // Проверка минимальной длины пакета (Ethernet header + IP header)
+    if (header->caplen < (ETHERNET_HEADER_LEN + sizeof(struct ip_header))) {
+        log_message(LOG_DEBUG, "Packet too short: %d bytes", header->caplen);
+        return;
+    }
+
+    // Проверяем тип пакета (должен быть IP - 0x0800)
+    uint16_t eth_type = ntohs(*(uint16_t*)(packet + 12));
+    if (eth_type != 0x0800) {
+        return; // Молча пропускаем не-IP пакеты
+    }
+
+    // Получаем указатель на IP заголовок
+    struct ip_header *ip_header = (struct ip_header *)(packet + ETHERNET_HEADER_LEN);
+
+    // Проверка версии IP
+    if (ip_header->ip_v != 4) {
+        log_message(LOG_DEBUG, "Non-IPv4 packet received: version %d", ip_header->ip_v);
+        return;
+    }
+
+    // Проверка длины IP заголовка
+    int ip_header_length = (ip_header->ip_hl & 0x0f) * 4;
+    if (ip_header_length < MIN_IP_HEADER_LEN || ip_header_length > MAX_IP_HEADER_LEN) {
+        log_message(LOG_WARNING, "Invalid IP header length: %d", ip_header_length);
+        return;
+    }
+
+    // Проверка полной длины пакета
+    if (header->caplen < (ETHERNET_HEADER_LEN + ip_header_length)) {
+        log_message(LOG_WARNING, "Incomplete IP packet received");
+        return;
+    }
+
+    // Применяем правила файрвола
+    FirewallAction action = evaluate_packet_rules(ip_header);
+
+    // Обновляем счетчики
+    if (action == ACTION_DENY) {
+        packets_blocked++;
+    } else if (action == ACTION_ALLOW) {
+        packets_allowed++;
+    }
+
+    // Выводим информацию о пакете
+    print_packet_info(ip_header, action);
+
+    // Увеличиваем счетчик обработанных пакетов
+    packets_processed++;
+
+    // Выводим статистику каждые 60 секунд
+    if (current_time - last_stats_time >= 60) {
+        printf("\n=== Firewall Statistics (%s) ===\n", timestamp);
+        printf("User: scrollDynasty\n");
+        printf("Packets processed: %lu\n", packets_processed);
+        printf("Packets blocked: %lu\n", packets_blocked);
+        printf("Packets allowed: %lu\n", packets_allowed);
+        printf("Blocked domains hits: %lu\n", domain_blocks);
+        printf("===============================\n\n");
+
+        last_stats_time = current_time;
+    }
+
+    // Проверка на перезапуск счетчиков
+    if (packets_processed >= ULONG_MAX - 1000) {
+        log_message(LOG_WARNING, "Resetting packet counters due to overflow risk");
+        packets_processed = 0;
+        packets_blocked = 0;
+        packets_allowed = 0;
+        domain_blocks = 0;
+    }
 }
 
 FirewallAction evaluate_packet_rules(const struct ip_header* ip_header) {
+    if (!ip_header) {
+        return ACTION_ALLOW;
+    }
+
     const u_char* packet = (const u_char*)ip_header;
     int header_length = (ip_header->ip_hl & 0x0f) * 4;
     uint16_t src_port = 0, dst_port = 0;
 
+    struct in_addr src_addr, dst_addr;
+    char src_ip[INET_ADDRSTRLEN] = {0};
+    char dst_ip[INET_ADDRSTRLEN] = {0};
+
+    src_addr.s_addr = ip_header->ip_src;
+    dst_addr.s_addr = ip_header->ip_dst;
+
+    inet_ntop(AF_INET, &src_addr, src_ip, INET_ADDRSTRLEN);
+    inet_ntop(AF_INET, &dst_addr, dst_ip, INET_ADDRSTRLEN);
+
     if (ip_header->ip_p == IPPROTO_TCP || ip_header->ip_p == IPPROTO_UDP) {
-        src_port = get_port(packet - 14, header_length, 1);
-        dst_port = get_port(packet - 14, header_length, 0);
+        src_port = get_port(packet, header_length, 1);
+        dst_port = get_port(packet, header_length, 0);
 
-        if (dst_port == 80 || dst_port == 443) {
-            struct tcp_header* tcp = (struct tcp_header*)(packet - 14 + header_length);
-            struct in_addr dst_addr;
-            dst_addr.s_addr = ip_header->ip_dst;
-            char* dst_ip = inet_ntoa(dst_addr);
-
-            if (is_ip_blocked(dst_ip)) {
-                log_message(LOG_WARNING, "Blocking access to blocked domain IP: %s", dst_ip);
-                return ACTION_DENY;
-            }
+        // Проверяем HTTP порт (80)
+        if (dst_port == 80 || src_port == 80) {
+            log_message(LOG_INFO, "[%s] Blocking HTTP traffic from %s to %s",
+                       "2025-01-30 17:29:59", src_ip, dst_ip);
+            return ACTION_DENY;
         }
 
+        // Проверяем заблокированные домены
+        if (is_ip_blocked(dst_ip) || is_ip_blocked(src_ip)) {
+            log_message(LOG_WARNING, "[%s] Blocking access to blocked domain IP: %s or %s",
+                       "2025-01-30 17:29:59", src_ip, dst_ip);
+            return ACTION_DENY;
+        }
+
+        // Правила для других портов
         switch (dst_port) {
-            case 80:
-                log_message(LOG_INFO, "Blocking HTTP traffic");
-                return ACTION_DENY;
             case 443:
+                if (is_ip_blocked(dst_ip)) {
+                    log_message(LOG_WARNING, "Blocking HTTPS access to blocked domain");
+                    return ACTION_DENY;
+                }
                 log_message(LOG_INFO, "Logging HTTPS traffic");
                 return ACTION_LOG;
             case 23:
@@ -118,7 +170,12 @@ FirewallAction evaluate_packet_rules(const struct ip_header* ip_header) {
         }
     }
 
+    // Проверяем ICMP пакеты
     if (ip_header->ip_p == IPPROTO_ICMP) {
+        if (is_ip_blocked(dst_ip) || is_ip_blocked(src_ip)) {
+            log_message(LOG_WARNING, "Blocking ICMP for blocked domain");
+            return ACTION_DENY;
+        }
         log_message(LOG_DEBUG, "Allowing ICMP traffic");
         return ACTION_ALLOW;
     }
@@ -127,6 +184,10 @@ FirewallAction evaluate_packet_rules(const struct ip_header* ip_header) {
 }
 
 void print_packet_info(const struct ip_header* ip_header, FirewallAction action) {
+    if (!ip_header) {
+        return;
+    }
+
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     char time_str[26];
     time_t now = time(NULL);
@@ -140,17 +201,20 @@ void print_packet_info(const struct ip_header* ip_header, FirewallAction action)
     if (ip_header->ip_p == IPPROTO_TCP || ip_header->ip_p == IPPROTO_UDP) {
         const u_char* packet = (const u_char*)ip_header;
         int header_length = (ip_header->ip_hl & 0x0f) * 4;
+
         uint16_t src_port = get_port(packet - 14, header_length, 1);
         uint16_t dst_port = get_port(packet - 14, header_length, 0);
-        snprintf(port_info, sizeof(port_info), ":%d->%d", src_port, dst_port);
+
+        if (src_port && dst_port) {
+            snprintf(port_info, sizeof(port_info), ":%d->%d", src_port, dst_port);
+        }
     }
 
-    const char* proto_str;
+    const char* proto_str = "Unknown";
     switch (ip_header->ip_p) {
         case IPPROTO_TCP:  proto_str = "TCP";  break;
         case IPPROTO_UDP:  proto_str = "UDP";  break;
         case IPPROTO_ICMP: proto_str = "ICMP"; break;
-        default:           proto_str = "Unknown";
     }
 
     WORD color;
@@ -173,6 +237,11 @@ void print_packet_info(const struct ip_header* ip_header, FirewallAction action)
             action_str = "UNKNOWN";
     }
 
+    WORD originalAttributes;
+    CONSOLE_SCREEN_BUFFER_INFO consoleInfo;
+    GetConsoleScreenBufferInfo(hConsole, &consoleInfo);
+    originalAttributes = consoleInfo.wAttributes;
+
     SetConsoleTextAttribute(hConsole, color | FOREGROUND_INTENSITY);
 
     printf("[%s] %s - %s - %s%s -> %s%s\n",
@@ -180,28 +249,5 @@ void print_packet_info(const struct ip_header* ip_header, FirewallAction action)
            inet_ntoa(src_addr), port_info,
            inet_ntoa(dst_addr), port_info);
 
-    SetConsoleTextAttribute(hConsole,
-        FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-
-    packets_total++;
-    if (action == ACTION_DENY) {
-        packets_blocked++;
-    } else if (action == ACTION_ALLOW) {
-        packets_allowed++;
-    }
-
-    if (packets_total % 100 == 0) {
-        printf("\n=== Packet Statistics ===\n");
-        printf("Total packets: %lu\n", packets_total);
-        printf("Blocked: %lu\n", packets_blocked);
-        printf("Allowed: %lu\n", packets_allowed);
-        printf("Domain blocks: %lu\n", domain_blocks);
-        printf("=====================\n\n");
-    }
-}
-
-void process_packet(const u_char *packet, const struct pcap_pkthdr *header) {
-    struct ip_header *ip_header = (struct ip_header *)(packet + 14);
-    FirewallAction action = evaluate_packet_rules(ip_header);
-    print_packet_info(ip_header, action);
+    SetConsoleTextAttribute(hConsole, originalAttributes);
 }

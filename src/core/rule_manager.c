@@ -1,74 +1,92 @@
 #include "rule_manager.h"
 #include "../utils/logger.h"
-#include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 
-static FirewallConfig* g_config = NULL;
+// Глобальная переменная для хранения заблокированных доменов
+static BlockedDomains blocked_domains = {{{0}}, 0};
 
-int init_rule_manager(FirewallConfig* config) {
-    if (!config) {
-        log_message(LOG_ERROR, "Rule manager initialization failed: null config");
-        return -1;
-    }
-
-    g_config = config;
-    log_message(LOG_INFO, "Rule manager initialized with %d rules", config->rule_count);
-    return 0;
+// Инициализация менеджера правил
+void init_rule_manager(void) {
+    blocked_domains.count = 0;
+    log_message(LOG_INFO, "Rule manager initialized");
 }
 
+// Очистка менеджера правил
 void cleanup_rule_manager(void) {
-    g_config = NULL;
+    blocked_domains.count = 0;
     log_message(LOG_INFO, "Rule manager cleaned up");
 }
 
-int add_rule(FirewallRule* rule) {
-    if (!g_config || !rule) {
-        return -1;
+// Добавление домена в список заблокированных
+void add_blocked_domain(const char* domain) {
+    if (!domain) {
+        log_message(LOG_ERROR, "Attempted to add NULL domain");
+        return;
     }
 
-    if (g_config->rule_count >= MAX_RULES) {
-        log_message(LOG_ERROR, "Cannot add rule: maximum number of rules reached");
-        return -1;
+    if (blocked_domains.count >= MAX_BLOCKED_DOMAINS) {
+        log_message(LOG_WARNING, "Maximum number of blocked domains reached");
+        return;
     }
 
-    memcpy(&g_config->rules[g_config->rule_count], rule, sizeof(FirewallRule));
-    g_config->rule_count++;
+    // Проверяем, не существует ли уже такой домен
+    for (int i = 0; i < blocked_domains.count; i++) {
+        if (strcmp(blocked_domains.domains[i], domain) == 0) {
+            log_message(LOG_INFO, "Domain %s is already blocked", domain);
+            return;
+        }
+    }
 
-    log_message(LOG_INFO, "Added new rule: ID %d", rule->id);
-    return 0;
+    // Добавляем новый домен
+    strncpy(blocked_domains.domains[blocked_domains.count],
+            domain,
+            MAX_DOMAIN_LENGTH - 1);
+    blocked_domains.domains[blocked_domains.count][MAX_DOMAIN_LENGTH - 1] = '\0';
+    blocked_domains.count++;
+
+    log_message(LOG_INFO, "Added blocked domain: %s", domain);
 }
 
-int remove_rule(uint32_t rule_id) {
-    if (!g_config) {
-        return -1;
+// Проверка, заблокирован ли IP-адрес
+bool is_ip_blocked(const char* ip) {
+    if (!ip) {
+        log_message(LOG_ERROR, "Attempted to check NULL IP");
+        return false;
     }
 
-    for (int i = 0; i < g_config->rule_count; i++) {
-        if (g_config->rules[i].id == rule_id) {
-            // Сдвигаем все последующие правила
-            for (int j = i; j < g_config->rule_count - 1; j++) {
-                memcpy(&g_config->rules[j], &g_config->rules[j + 1], sizeof(FirewallRule));
+    // Проверяем каждый заблокированный домен
+    for (int i = 0; i < blocked_domains.count; i++) {
+        struct addrinfo hints = {0}, *result;
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+
+        // Пытаемся получить IP-адрес для домена
+        if (getaddrinfo(blocked_domains.domains[i], NULL, &hints, &result) == 0) {
+            struct addrinfo *rp;
+            for (rp = result; rp != NULL; rp = rp->ai_next) {
+                struct sockaddr_in *ipv4 = (struct sockaddr_in *)rp->ai_addr;
+                char addr[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &(ipv4->sin_addr), addr, INET_ADDRSTRLEN);
+
+                if (strcmp(addr, ip) == 0) {
+                    freeaddrinfo(result);
+                    log_message(LOG_INFO, "IP %s matches blocked domain %s",
+                              ip, blocked_domains.domains[i]);
+                    return true;
+                }
             }
-            g_config->rule_count--;
-            log_message(LOG_INFO, "Removed rule: ID %d", rule_id);
-            return 0;
+            freeaddrinfo(result);
         }
     }
 
-    log_message(LOG_WARNING, "Rule not found: ID %d", rule_id);
-    return -1;
+    return false;
 }
 
-FirewallRule* find_rule(uint32_t rule_id) {
-    if (!g_config) {
-        return NULL;
-    }
-
-    for (int i = 0; i < g_config->rule_count; i++) {
-        if (g_config->rules[i].id == rule_id) {
-            return &g_config->rules[i];
-        }
-    }
-
-    return NULL;
+// Получение списка заблокированных доменов
+const BlockedDomains* get_blocked_domains(void) {
+    return &blocked_domains;
 }

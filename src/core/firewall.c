@@ -8,9 +8,21 @@
 #include <string.h>
 #include <windows.h>
 #include <ws2tcpip.h>
+#include <signal.h>
+#include <time.h>
 
 static int firewall_enabled = 0;
 static FirewallConfig current_config;
+static volatile int keep_running = 1;
+
+void handle_signal(int signal) {
+    if (signal == SIGINT) {
+        printf("\n[%s] Received Ctrl+C, shutting down gracefully...\n",
+               "2025-01-30 17:29:59");
+        keep_running = 0;
+    }
+}
+
 
 int firewall_init(const char* config_file) {
     if (log_init("firewall.log") != 0) {
