@@ -10,21 +10,26 @@
 #include <ws2tcpip.h>
 #include <signal.h>
 #include <time.h>
+#include "firewall_types.h"
 
+// Глобальные переменные
 static int firewall_enabled = 0;
 static FirewallConfig current_config;
 static volatile int keep_running = 1;
+static const char *current_user = "scrollDynasty";
+static const char *current_date = "2025-01-30 17:34:11";
 
+// Обработчик сигнала для graceful shutdown
 void handle_signal(int signal) {
     if (signal == SIGINT) {
-        printf("\n[%s] Received Ctrl+C, shutting down gracefully...\n",
-               "2025-01-30 17:29:59");
+        printf("\n[%s] Received Ctrl+C, shutting down gracefully...\n", current_date);
         keep_running = 0;
     }
 }
 
-
+// Инициализация файрвола
 int firewall_init(const char* config_file) {
+    // Инициализация логгера
     if (log_init("firewall.log") != 0) {
         printf("Failed to initialize logger\n");
         return -1;
@@ -32,13 +37,14 @@ int firewall_init(const char* config_file) {
 
     log_message(LOG_INFO, "Initializing firewall...");
 
+    // Открытие конфигурационного файла
     FILE* f = fopen(config_file, "rb");
     if (!f) {
         log_message(LOG_ERROR, "Failed to open config file: %s", config_file);
         return -1;
     }
 
-
+    // Чтение конфигурационного файла
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -48,6 +54,7 @@ int firewall_init(const char* config_file) {
     fclose(f);
     json_str[fsize] = 0;
 
+    // Парсинг JSON конфигурации
     cJSON* config = cJSON_Parse(json_str);
     free(json_str);
 
@@ -59,21 +66,25 @@ int firewall_init(const char* config_file) {
         return -1;
     }
 
+    // Проверка включения файрвола
     cJSON* enabled_obj = cJSON_GetObjectItem(config, "enabled");
     if (cJSON_IsBool(enabled_obj)) {
         firewall_enabled = cJSON_IsTrue(enabled_obj);
     }
 
+    // Загрузка заблокированных доменов
     cJSON* blocked_domains = cJSON_GetObjectItem(config, "blocked_domains");
     if (blocked_domains) {
         cJSON* domain;
         cJSON_ArrayForEach(domain, blocked_domains) {
             if (cJSON_IsString(domain)) {
                 add_blocked_domain(domain->valuestring);
+                log_message(LOG_INFO, "Added blocked domain: %s", domain->valuestring);
             }
         }
     }
 
+    // Загрузка правил файрвола
     cJSON* rules = cJSON_GetObjectItem(config, "rules");
     if (rules) {
         current_config.rule_count = 0;
@@ -108,14 +119,19 @@ int firewall_init(const char* config_file) {
         return 0;
     }
 
+    // Установка обработчика сигнала
+    signal(SIGINT, handle_signal);
+
     log_message(LOG_INFO, "Firewall initialized successfully");
     return 0;
 }
 
+// Проверка состояния файрвола
 int firewall_is_enabled() {
     return firewall_enabled;
 }
 
+// Очистка ресурсов
 void firewall_cleanup() {
     log_message(LOG_INFO, "Cleaning up firewall...");
     current_config.rule_count = 0;
@@ -123,18 +139,20 @@ void firewall_cleanup() {
     log_close();
 }
 
+// Получение текущей конфигурации
 const FirewallConfig* get_current_config() {
     return &current_config;
 }
 
+// Добавление правила
 int add_firewall_rule(const FirewallRule* rule) {
     if (!rule || current_config.rule_count >= MAX_RULES) return -1;
-
     current_config.rules[current_config.rule_count] = *rule;
     current_config.rule_count++;
     return 0;
 }
 
+// Удаление правила
 int remove_firewall_rule(int rule_index) {
     if (rule_index < 0 || rule_index >= current_config.rule_count) return -1;
 
@@ -146,15 +164,18 @@ int remove_firewall_rule(int rule_index) {
     return 0;
 }
 
+// Обновление правил
 void update_firewall_rules(const FirewallConfig* new_config) {
     if (!new_config) return;
     memcpy(&current_config, new_config, sizeof(FirewallConfig));
 }
 
+// Вывод статуса файрвола
 void print_firewall_status() {
-    printf("\n=== Firewall Status ===\n");
+    printf("\n=== Firewall Status (%s) ===\n", current_date);
     printf("Status: %s\n", firewall_enabled ? "Enabled" : "Disabled");
     printf("Active Rules: %d\n", current_config.rule_count);
+    printf("Current User: %s\n", current_user);
     printf("===================\n\n");
 
     if (current_config.rule_count > 0) {
@@ -184,6 +205,7 @@ void print_firewall_status() {
     }
 }
 
+// Сохранение правил в файл
 int save_rules_to_file(const char* filename) {
     cJSON *root = cJSON_CreateObject();
     cJSON *rules_array = cJSON_CreateArray();
@@ -234,6 +256,7 @@ int save_rules_to_file(const char* filename) {
     return 0;
 }
 
+// Загрузка правил из файла
 int load_rules_from_file(const char* filename) {
     FILE *f = fopen(filename, "r");
     if (!f) {
@@ -268,4 +291,9 @@ int load_rules_from_file(const char* filename) {
 
     log_message(LOG_INFO, "Rules loaded from file: %s", filename);
     return 0;
+}
+
+// Проверка состояния работы файрвола
+int is_firewall_running(void) {
+    return keep_running;
 }

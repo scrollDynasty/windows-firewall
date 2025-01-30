@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include "firewall.h"
+#include "firewall_types.h"
 
 #define MAX_BLOCKED_DOMAINS 100
 #define MAX_DOMAIN_LENGTH 256

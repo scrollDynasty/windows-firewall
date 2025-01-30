@@ -1,39 +1,25 @@
 #ifndef FIREWALL_H
 #define FIREWALL_H
 
-#include <stdint.h>
-#include "packet_handler.h"
+#include "firewall_types.h"
 
-#define MAX_RULES 1000
-#define MAX_PACKET_SIZE 65535
-
-// Структура для правила файрвола
-typedef struct {
-    uint32_t id;
-    char name[64];
-    uint32_t src_ip;
-    uint32_t dst_ip;
-    uint16_t src_port;
-    uint16_t dst_port;
-    uint8_t protocol;
-    FirewallAction action;
-    char description[256];
-} FirewallRule;
-
-// Структура для конфигурации файрвола
-typedef struct {
-    int enabled;
-    char log_file[256];
-    int log_level;
-    FirewallRule rules[MAX_RULES];
-    int rule_count;
-} FirewallConfig;
-
-// Основные функции
+// Функции инициализации и управления
 int firewall_init(const char* config_file);
-int firewall_start();
-int firewall_stop();
-int firewall_reload_config();
-void firewall_cleanup();
+void firewall_cleanup(void);
+int firewall_is_enabled(void);
+int is_firewall_running(void);
+
+// Функции управления конфигурацией
+const FirewallConfig* get_current_config(void);
+int add_firewall_rule(const FirewallRule* rule);
+int remove_firewall_rule(int rule_index);
+void update_firewall_rules(const FirewallConfig* new_config);
+
+// Функции для работы с файлами конфигурации
+int save_rules_to_file(const char* filename);
+int load_rules_from_file(const char* filename);
+
+// Функции статистики и отображения
+void print_firewall_status(void);
 
 #endif // FIREWALL_H

@@ -8,7 +8,7 @@
 #include <pcap.h>
 
 #define VERSION "1.0"
-#define BUILD_DATE "2025-01-25"
+#define BUILD_DATE "2025-01-30 17:35:41"
 #define AUTHOR "scrollDynasty"
 
 // Флаг для корректного завершения программы
@@ -48,6 +48,8 @@ void print_banner() {
     printf("- Telnet blocking (port 23)\n");
     printf("- FTP logging (ports 20, 21)\n");
     printf("- ICMP (ping) monitoring\n");
+    printf("- Domain blocking\n");  // Добавлено
+    printf("- Real-time traffic monitoring\n");  // Добавлено
     printf("================================================\n\n");
     SetConsoleTextAttribute(hConsole, originalAttributes);
 }
@@ -59,16 +61,20 @@ int main(int argc, char* argv[]) {
     char current_path[MAX_PATH];
     GetCurrentDirectory(MAX_PATH, current_path);
 
-    // Создаем директорию logs
-    char logs_dir[MAX_PATH];
+    // Создаем директории для логов и конфигурации
+    char logs_dir[MAX_PATH], config_dir[MAX_PATH];
     snprintf(logs_dir, sizeof(logs_dir), "%s\\logs", current_path);
+    snprintf(config_dir, sizeof(config_dir), "%s\\config", current_path);
     CreateDirectory(logs_dir, NULL);
+    CreateDirectory(config_dir, NULL);
 
-    // Формируем полный путь к лог-файлу
-    char log_path[MAX_PATH];
+    // Формируем пути к файлам
+    char log_path[MAX_PATH], config_path[MAX_PATH];
     snprintf(log_path, sizeof(log_path), "%s\\logs\\firewall.log", current_path);
+    snprintf(config_path, sizeof(config_path), "%s\\config\\firewall_config.json", current_path);
 
-    printf("Log file will be saved to: %s\n\n", log_path);
+    printf("Log file: %s\n", log_path);
+    printf("Config file: %s\n\n", config_path);
 
     // Регистрируем обработчик сигналов
     if (!SetConsoleCtrlHandler(console_handler, TRUE)) {
@@ -78,7 +84,7 @@ int main(int argc, char* argv[]) {
 
     // Инициализация системы логирования
     if (log_init(log_path) != 0) {
-        printf("Failed to initialize logging system at: %s\n", log_path);
+        printf("Failed to initialize logging system\n");
         return 1;
     }
     log_set_level(LOG_DEBUG);
@@ -124,7 +130,7 @@ int main(int argc, char* argv[]) {
     log_message(LOG_INFO, "Selected interface: %s", d->name);
 
     // Инициализация файрвола
-    if (firewall_init("config/firewall_config.json") != 0) {
+    if (firewall_init(config_path) != 0) {
         log_message(LOG_ERROR, "Failed to initialize firewall");
         pcap_freealldevs(alldevs);
         return 1;
@@ -140,14 +146,10 @@ int main(int argc, char* argv[]) {
 
     pcap_freealldevs(alldevs);
 
+    // Выводим информацию о запуске
     printf("\nFirewall is running. Press Ctrl+C to stop.\n");
     printf("------------------------------------------------\n");
-    printf("Active Rules:\n");
-    printf("1. Block all HTTP traffic (port 80)\n");
-    printf("2. Log all HTTPS traffic (port 443)\n");
-    printf("3. Block Telnet traffic (port 23)\n");
-    printf("4. Log FTP traffic (ports 20, 21)\n");
-    printf("5. Allow ICMP traffic (ping)\n");
+    print_firewall_status(); // Добавлено: показываем текущий статус
     printf("------------------------------------------------\n");
     printf("\nPacket processing started...\n\n");
 
@@ -158,19 +160,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Основной цикл
-    while (running) {
-        Sleep(100); // Небольшая задержка для снижения нагрузки на CPU
+    // Основной цикл с обработкой статистики
+    while (running && is_firewall_running()) {
+        Sleep(100); // Задержка для снижения нагрузки на CPU
     }
 
     // Очистка и завершение работы
+    printf("\nShutting down firewall...\n");
     stop_packet_capture();
     firewall_cleanup();
     log_message(LOG_INFO, "Firewall shutdown complete");
     log_close();
 
     printf("\nFirewall stopped successfully.\n");
-    printf("Log file is available at: %s\n", log_path);
+    printf("Log file: %s\n", log_path);
+    printf("Config file: %s\n", config_path);
 
     return 0;
 }

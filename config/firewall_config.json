@@ -2,6 +2,8 @@
   "enabled": true,
   "log_file": "firewall.log",
   "log_level": "info",
+  "current_date": "2025-01-30 17:51:43",
+  "current_user": "scrollDynasty",
   "blocked_domains": [
     "facebook.com",
     "twitter.com",

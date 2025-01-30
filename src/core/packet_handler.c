@@ -1,10 +1,8 @@
 #include "packet_handler.h"
 #include "rule_manager.h"
 #include "../utils/logger.h"
-#include <pcap.h>
 #include <stdio.h>
 #include <time.h>
-#include <limits.h>
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -119,13 +117,14 @@ FirewallAction evaluate_packet_rules(const struct ip_header* ip_header) {
         return ACTION_ALLOW;
     }
 
-    const u_char* packet = (const u_char*)ip_header;
-    int header_length = (ip_header->ip_hl & 0x0f) * 4;
+    int ip_header_length = (ip_header->ip_hl & 0x0f) * 4;
+    struct tcp_header* tcp_header = NULL;
+    struct udp_header* udp_header = NULL;
     uint16_t src_port = 0, dst_port = 0;
 
+    // Получаем IP адреса
     struct in_addr src_addr, dst_addr;
-    char src_ip[INET_ADDRSTRLEN] = {0};
-    char dst_ip[INET_ADDRSTRLEN] = {0};
+    char src_ip[INET_ADDRSTRLEN], dst_ip[INET_ADDRSTRLEN];
 
     src_addr.s_addr = ip_header->ip_src;
     dst_addr.s_addr = ip_header->ip_dst;
@@ -133,54 +132,96 @@ FirewallAction evaluate_packet_rules(const struct ip_header* ip_header) {
     inet_ntop(AF_INET, &src_addr, src_ip, INET_ADDRSTRLEN);
     inet_ntop(AF_INET, &dst_addr, dst_ip, INET_ADDRSTRLEN);
 
-    if (ip_header->ip_p == IPPROTO_TCP || ip_header->ip_p == IPPROTO_UDP) {
-        src_port = get_port(packet, header_length, 1);
-        dst_port = get_port(packet, header_length, 0);
+    // Проверяем заблокированные домены
+    if (is_ip_blocked(dst_ip)) {
+        log_message(LOG_WARNING, "Blocking access to blocked domain IP: %s", dst_ip);
+        return ACTION_DENY;
+    }
 
-        // Проверяем HTTP порт (80)
-        if (dst_port == 80 || src_port == 80) {
-            log_message(LOG_INFO, "[%s] Blocking HTTP traffic from %s to %s",
-                       "2025-01-30 17:29:59", src_ip, dst_ip);
-            return ACTION_DENY;
-        }
+    // Обработка TCP пакетов
+    if (ip_header->ip_p == IPPROTO_TCP) {
+        tcp_header = (struct tcp_header*)((u_char*)ip_header + ip_header_length);
+        src_port = ntohs(tcp_header->source);
+        dst_port = ntohs(tcp_header->dest);
 
-        // Проверяем заблокированные домены
-        if (is_ip_blocked(dst_ip) || is_ip_blocked(src_ip)) {
-            log_message(LOG_WARNING, "[%s] Blocking access to blocked domain IP: %s or %s",
-                       "2025-01-30 17:29:59", src_ip, dst_ip);
-            return ACTION_DENY;
-        }
-
-        // Правила для других портов
-        switch (dst_port) {
-            case 443:
-                if (is_ip_blocked(dst_ip)) {
-                    log_message(LOG_WARNING, "Blocking HTTPS access to blocked domain");
-                    return ACTION_DENY;
-                }
-                log_message(LOG_INFO, "Logging HTTPS traffic");
-                return ACTION_LOG;
-            case 23:
-                log_message(LOG_INFO, "Blocking Telnet traffic");
+        // Блокировка HTTP и HTTPS для заблокированных доменов
+        if (is_ip_blocked(dst_ip)) {
+            if (src_port == PORT_HTTP || dst_port == PORT_HTTP ||
+                src_port == PORT_HTTPS || dst_port == PORT_HTTPS) {
+                log_message(LOG_WARNING, "Blocking HTTP/HTTPS traffic to blocked domain: %s", dst_ip);
                 return ACTION_DENY;
-            case 20:
-            case 21:
-                log_message(LOG_INFO, "Logging FTP traffic");
-                return ACTION_LOG;
+            }
         }
-    }
 
-    // Проверяем ICMP пакеты
-    if (ip_header->ip_p == IPPROTO_ICMP) {
-        if (is_ip_blocked(dst_ip) || is_ip_blocked(src_ip)) {
-            log_message(LOG_WARNING, "Blocking ICMP for blocked domain");
+        // Блокировка HTTP (порт 80)
+        if (src_port == PORT_HTTP || dst_port == PORT_HTTP) {
+            // Проверяем, не является ли это ответом от заблокированного домена
+            if (is_ip_blocked(src_ip) || is_ip_blocked(dst_ip)) {
+                log_message(LOG_WARNING, "Blocking HTTP response from blocked domain");
+                return ACTION_DENY;
+            }
+            log_message(LOG_WARNING, "Blocking HTTP traffic from %s:%d to %s:%d",
+                       src_ip, src_port, dst_ip, dst_port);
             return ACTION_DENY;
         }
-        log_message(LOG_DEBUG, "Allowing ICMP traffic");
-        return ACTION_ALLOW;
+
+        // Проверка HTTPS (порт 443)
+        if (src_port == PORT_HTTPS || dst_port == PORT_HTTPS) {
+            // Проверяем, не является ли это HTTPS-соединением с заблокированным доменом
+            if (is_ip_blocked(src_ip) || is_ip_blocked(dst_ip)) {
+                log_message(LOG_WARNING, "Blocking HTTPS connection to blocked domain");
+                return ACTION_DENY;
+            }
+            log_message(LOG_INFO, "Logging HTTPS traffic");
+            return ACTION_LOG;
+        }
+
+        // Блокировка Telnet (порт 23)
+        if (src_port == PORT_TELNET || dst_port == PORT_TELNET) {
+            log_message(LOG_WARNING, "Blocking Telnet traffic");
+            return ACTION_DENY;
+        }
+
+        // Логирование FTP (порты 20, 21)
+        if (src_port == PORT_FTP_DATA || dst_port == PORT_FTP_DATA ||
+            src_port == PORT_FTP_CTRL || dst_port == PORT_FTP_CTRL) {
+            log_message(LOG_INFO, "Logging FTP traffic");
+            return ACTION_LOG;
+        }
+    }
+    // Обработка UDP пакетов
+    else if (ip_header->ip_p == IPPROTO_UDP) {
+        udp_header = (struct udp_header*)((u_char*)ip_header + ip_header_length);
+        src_port = ntohs(udp_header->source);
+        dst_port = ntohs(udp_header->dest);
+
+        // Блокировка DNS-запросов к заблокированным доменам
+        if (dst_port == PORT_DNS) {
+            if (is_ip_blocked(dst_ip)) {
+                log_message(LOG_WARNING, "Blocking DNS request to blocked server");
+                return ACTION_DENY;
+            }
+        }
     }
 
-    return ACTION_ALLOW;
+    // Применяем пользовательские правила
+    const FirewallConfig* config = get_current_config();
+    if (config) {
+        for (int i = 0; i < config->rule_count; i++) {
+            const FirewallRule* rule = &config->rules[i];
+
+            if ((rule->src_ip == 0 || rule->src_ip == ip_header->ip_src) &&
+                (rule->dst_ip == 0 || rule->dst_ip == ip_header->ip_dst) &&
+                (rule->protocol == 0 || rule->protocol == ip_header->ip_p) &&
+                (rule->src_port == 0 || rule->src_port == src_port) &&
+                (rule->dst_port == 0 || rule->dst_port == dst_port)) {
+
+                return rule->action;
+            }
+        }
+    }
+
+    return ACTION_LOG;  // По умолчанию логируем весь трафик
 }
 
 void print_packet_info(const struct ip_header* ip_header, FirewallAction action) {
@@ -222,19 +263,19 @@ void print_packet_info(const struct ip_header* ip_header, FirewallAction action)
     switch (action) {
         case ACTION_ALLOW:
             color = FOREGROUND_GREEN;
-            action_str = "ALLOWED";
-            break;
+        action_str = "ALLOWED";
+        break;
         case ACTION_DENY:
-            color = FOREGROUND_RED;
-            action_str = "BLOCKED";
-            break;
+            color = FOREGROUND_RED | FOREGROUND_INTENSITY;
+        action_str = "BLOCKED";
+        break;
         case ACTION_LOG:
             color = FOREGROUND_BLUE | FOREGROUND_GREEN;
-            action_str = "LOGGED ";
-            break;
+        action_str = "LOGGED ";
+        break;
         default:
             color = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-            action_str = "UNKNOWN";
+        action_str = "UNKNOWN";
     }
 
     WORD originalAttributes;
