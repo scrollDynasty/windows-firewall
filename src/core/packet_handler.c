@@ -6,6 +6,11 @@
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <limits.h>
+
+// Глобальные настройки
+static const char* CURRENT_DATE = "2025-01-30 18:00:03";
+static const char* CURRENT_USER = "scrollDynasty";
 
 // Глобальные счетчики
 static unsigned long packets_blocked = 0;
@@ -91,8 +96,8 @@ void process_packet(const u_char *packet, const struct pcap_pkthdr *header) {
 
     // Выводим статистику каждые 60 секунд
     if (current_time - last_stats_time >= 60) {
-        printf("\n=== Firewall Statistics (%s) ===\n", timestamp);
-        printf("User: scrollDynasty\n");
+        printf("\n=== Firewall Statistics (%s) ===\n", CURRENT_DATE);
+        printf("User: %s\n", CURRENT_USER);
         printf("Packets processed: %lu\n", packets_processed);
         printf("Packets blocked: %lu\n", packets_blocked);
         printf("Packets allowed: %lu\n", packets_allowed);
@@ -135,6 +140,7 @@ FirewallAction evaluate_packet_rules(const struct ip_header* ip_header) {
     // Проверяем заблокированные домены
     if (is_ip_blocked(dst_ip)) {
         log_message(LOG_WARNING, "Blocking access to blocked domain IP: %s", dst_ip);
+        domain_blocks++;
         return ACTION_DENY;
     }
 
@@ -263,19 +269,19 @@ void print_packet_info(const struct ip_header* ip_header, FirewallAction action)
     switch (action) {
         case ACTION_ALLOW:
             color = FOREGROUND_GREEN;
-        action_str = "ALLOWED";
-        break;
+            action_str = "ALLOWED";
+            break;
         case ACTION_DENY:
             color = FOREGROUND_RED | FOREGROUND_INTENSITY;
-        action_str = "BLOCKED";
-        break;
+            action_str = "BLOCKED";
+            break;
         case ACTION_LOG:
             color = FOREGROUND_BLUE | FOREGROUND_GREEN;
-        action_str = "LOGGED ";
-        break;
+            action_str = "LOGGED ";
+            break;
         default:
             color = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-        action_str = "UNKNOWN";
+            action_str = "UNKNOWN";
     }
 
     WORD originalAttributes;
@@ -292,3 +298,4 @@ void print_packet_info(const struct ip_header* ip_header, FirewallAction action)
 
     SetConsoleTextAttribute(hConsole, originalAttributes);
 }
+
