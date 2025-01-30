@@ -8,7 +8,7 @@ typedef enum {
     LOG_ERROR = 3
 } LogLevel;
 
-// Инициализация системы логирования
+// Инициализация логгера
 int log_init(const char* filename);
 
 // Установка уровня логирования
@@ -17,7 +17,10 @@ void log_set_level(LogLevel level);
 // Запись сообщения в лог
 void log_message(LogLevel level, const char* format, ...);
 
-// Закрытие системы логирования
+// Закрытие логгера
 void log_close(void);
 
-#endif // FIREWALL_LOGGER_H
+// Получение пути к файлу лога
+const char* get_log_path(void);
+
+#endif
