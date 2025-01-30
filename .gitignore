@@ -21,10 +21,3 @@
 *.dll
 *.lib
 *.pdb
-
-# Config files that могут содержать sensitive data
-/config/*.json
-/config/*.conf
-
-# Dependencies that should be installed separately
-/extern/npcap/
