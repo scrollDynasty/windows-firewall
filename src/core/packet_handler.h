@@ -1,7 +1,7 @@
 #ifndef FIREWALL_PACKET_HANDLER_H
 #define FIREWALL_PACKET_HANDLER_H
 
-#include <pcap.h>
+#include <../extern/npcap/Include/pcap.h>
 #include "../extern/net_headers/ip.h"
 #include "../extern/net_headers/tcp.h"
 
